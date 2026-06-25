@@ -232,7 +232,7 @@ Bắt đầu từ [Bước 1](tasks/buoc-1.md).
 | Bước 1 - Phân tích | Xác định và giải thích bộ siêu tham số tốt nhất | 4 |
 | Bước 2 - DVC | Remote đã cấu hình, `dvc push` thành công, dữ liệu hiển thị trên cloud storage | 12 |
 | Bước 2 - CI/CD | Cả ba GitHub Actions jobs (Test, Train, Deploy) đều qua (màu xanh) | 16 |
-| Bước 2 - Eval gate | Deploy job tự động bị chặn khi accuracy dưới ngưỡng 0.70 | 4 |
+| Bước 2 - Eval gate | Deploy job tự động bị chặn khi accuracy dưới ngưỡng 0.65 | 4 |
 | Bước 2 - Serving | VM trả về kết quả đúng tại endpoint POST /predict | 12 |
 | Bước 3 - Tự động hóa | Một commit dữ liệu mới kích hoạt toàn bộ pipeline không cần tác động thủ công | 12 |
 | Tổng | | 80 |
