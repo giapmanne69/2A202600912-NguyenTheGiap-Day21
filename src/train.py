@@ -11,7 +11,12 @@ import os
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score
 
+# Đặt tracking URI mặc định sang sqlite nếu không có cấu hình môi trường (.env không được push lên git)
+if not os.environ.get("MLFLOW_TRACKING_URI"):
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+
 EVAL_THRESHOLD = 0.70
+
 
 
 def train(
