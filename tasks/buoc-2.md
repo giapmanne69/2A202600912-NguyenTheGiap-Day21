@@ -8,68 +8,92 @@ Thời gian ước tính: 4-5 giờ
 
 ## Lựa Chọn Cloud Provider
 
-Bạn có thể sử dụng **một trong ba** cloud provider sau. Các hướng dẫn trong file này lấy **GCP làm ví dụ mặc định**. Nếu dùng AWS hoặc Azure, ánh xạ theo bảng dưới đây:
+Bạn sẽ sử dụng **AWS (Amazon Web Services)** cho phần này. Ánh xạ các khái niệm như sau:
 
-| Khái niệm | GCP | AWS | Azure |
-|---|---|---|---|
-| Object Storage | Google Cloud Storage (GCS) | Amazon S3 | Azure Blob Storage |
-| VM | Compute Engine (GCE) | EC2 | Azure Virtual Machine |
-| CLI | `gcloud` / `gsutil` | `aws` | `az` |
-| DVC storage extra | `dvc[gs]` | `dvc[s3]` | `dvc[azure]` |
-| Cloud SDK Python | `google-cloud-storage` | `boto3` | `azure-storage-blob` |
-| Credentials | Service Account JSON | Access Key / IAM Role | Service Principal / Connection String |
+| Khái niệm | AWS |
+|---|---|
+| Object Storage | Amazon S3 |
+| VM | EC2 |
+| CLI | `aws` CLI |
+| DVC storage extra | `dvc[s3]` |
+| Cloud SDK Python | `boto3` |
+| Credentials | AWS Access Key ID / Secret Access Key |
 
 ---
 
-## 2.1 Tạo Cloud Storage Bucket
+## 2.1 Tạo Cloud Storage Bucket (Amazon S3)
 
-Tên bucket phải là duy nhất trên toàn bộ hệ thống của provider đã chọn. Ví dụ dưới đây dùng GCP — thay bằng lệnh tương đương nếu dùng AWS (`aws s3 mb s3://$BUCKET`) hoặc Azure (`az storage container create --name $CONTAINER`).
+Tên bucket phải là duy nhất trên toàn cầu. Thay thế `<BUCKET_NAME>` và `<AWS_REGION>` bằng giá trị của bạn.
 
-Thay thế `<YOUR_PROJECT>` và `<BUCKET_NAME>` bằng giá trị của bạn.
+**Windows (PowerShell):**
+```powershell
+$env:BUCKET="<BUCKET_NAME>"
+$env:AWS_DEFAULT_REGION="us-east-1"
 
+# Tạo S3 bucket
+aws s3 mb s3://$env:BUCKET --region $env:AWS_DEFAULT_REGION
+```
+
+**Linux / macOS:**
 ```bash
-export PROJECT=<YOUR_PROJECT>
 export BUCKET=<BUCKET_NAME>
+export AWS_DEFAULT_REGION=us-east-1
 
-gsutil mb -p $PROJECT -l us-central1 gs://$BUCKET
-```
-
-Kích hoạt Cloud Storage API (chỉ cần làm một lần):
-
-```bash
-gcloud services enable storage.googleapis.com --project $PROJECT
+# Tạo S3 bucket
+aws s3 mb s3://$BUCKET --region $AWS_DEFAULT_REGION
 ```
 
 ---
 
-## 2.2 Tạo Cloud Credentials
+## 2.2 Tạo Cloud Credentials (IAM User)
 
-Mỗi provider có cơ chế xác thực riêng: GCP dùng Service Account JSON, AWS dùng IAM User Access Key hoặc IAM Role, Azure dùng Service Principal hoặc Connection String. Ví dụ dưới đây dùng GCP.
+Tạo IAM User với quyền tối thiểu để truy cập bucket S3 của bạn.
 
-Service account này là danh tính duy nhất được phép truy cập bucket. Nguyên tắc quyền tối thiểu: chỉ cấp quyền cần thiết, trên đúng phạm vi cần thiết.
-
-| Role | Sử dụng | Lý do |
-|---|---|---|
-| roles/storage.objectAdmin | Nên dùng | Cho phép đọc, ghi, xóa object bên trong bucket. DVC cần quyền này. |
-| roles/storage.admin | Không dùng | Cho phép xóa cả bucket, vi phạm nguyên tắc quyền tối thiểu. |
-
+1. Tạo một IAM User:
 ```bash
-# Tạo service account
-gcloud iam service-accounts create mlops-lab-sa \
-  --display-name "MLOps Lab SA" \
-  --project $PROJECT
-
-# Cấp quyền objectAdmin chỉ trên bucket của bạn (không phải toàn bộ project)
-gsutil iam ch \
-  serviceAccount:mlops-lab-sa@$PROJECT.iam.gserviceaccount.com:roles/storage.objectAdmin \
-  gs://$BUCKET
-
-# Xuất file key JSON
-gcloud iam service-accounts keys create sa-key.json \
-  --iam-account mlops-lab-sa@$PROJECT.iam.gserviceaccount.com
+aws iam create-user --user-name mlops-lab-user
 ```
 
-Lưu ý: `sa-key.json` tuyệt đối không được commit vào git. File này đã có trong `.gitignore`.
+2. Tạo chính sách (policy) truy cập S3 chỉ cho bucket cụ thể của bạn:
+```bash
+# Tạo file s3-policy.json
+cat <<EOF > s3-policy.json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:ListBucket",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::$BUCKET",
+                "arn:aws:s3:::$BUCKET/*"
+            ]
+        }
+    ]
+}
+EOF
+
+# Đăng ký policy này lên AWS
+aws iam create-policy --policy-name mlops-s3-policy --policy-document file://s3-policy.json
+```
+
+3. Gắn policy vào IAM User (thay thế `<ACCOUNT_ID>` bằng AWS Account ID của bạn):
+```bash
+aws iam attach-user-policy \
+  --user-name mlops-lab-user \
+  --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/mlops-s3-policy
+```
+
+4. Tạo Access Key ID và Secret Access Key cho user này:
+```bash
+aws iam create-access-key --user-name mlops-lab-user
+```
+Lưu lại `AccessKeyId` và `SecretAccessKey` thu được. Không lưu chúng trong git.
 
 ---
 
@@ -78,17 +102,11 @@ Lưu ý: `sa-key.json` tuyệt đối không được commit vào git. File này
 ```bash
 dvc init
 
-# Trỏ DVC đến cloud storage (chọn một dòng theo provider):
-# GCP:   dvc remote add -d myremote gs://$BUCKET/dvc
-# AWS:   dvc remote add -d myremote s3://$BUCKET/dvc
-# Azure: dvc remote add -d myremote azure://mycontainer/dvc
-dvc remote add -d myremote gs://$BUCKET/dvc   # thay URL theo provider
+# Trỏ DVC đến AWS S3 bucket:
+dvc remote add -d myremote s3://$BUCKET/dvc
 
-# Cấu hình credentials:
-# GCP: thêm đường dẫn service account key
-dvc remote modify myremote credentialpath sa-key.json
-# AWS: tự đọc ~/.aws/credentials hoặc biến môi trường AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-# Azure: dvc remote modify myremote connection_string "<YOUR_CONNECTION_STRING>"
+# Cấu hình credentials (sử dụng Access Key vừa tạo):
+# AWS tự động đọc từ ~/.aws/credentials hoặc từ biến môi trường AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
 
 # Theo dõi các file dữ liệu bằng DVC
 dvc add data/train_phase1.csv
@@ -100,64 +118,85 @@ git add data/train_phase1.csv.dvc data/eval.csv.dvc data/train_phase2.csv.dvc \
         .gitignore .dvc/config
 git commit -m "feat: track datasets with DVC"
 
-# Đẩy các file CSV lên GCS
+# Thiết lập biến môi trường AWS để DVC push
+# Windows (PowerShell):
+$env:AWS_ACCESS_KEY_ID="<AccessKeyId>"
+$env:AWS_SECRET_ACCESS_KEY="<SecretAccessKey>"
+# Linux/macOS:
+export AWS_ACCESS_KEY_ID="<AccessKeyId>"
+export AWS_SECRET_ACCESS_KEY="<SecretAccessKey>"
+
+# Đẩy các file CSV lên S3
 dvc push
 ```
 
-Xác nhận trên Cloud Storage Console rằng các file dữ liệu đã xuất hiện dưới prefix `dvc/` trong bucket.
+Xác nhận trên AWS S3 Console rằng các file dữ liệu đã xuất hiện dưới prefix `dvc/` trong bucket.
 
 ---
 
-## 2.4 Tạo VM Trên Cloud
+## 2.4 Tạo VM Trên Cloud (AWS EC2)
 
-Ví dụ dưới đây dùng GCE (GCP). Tương đương: AWS EC2 (`aws ec2 run-instances ...`) hoặc Azure VM (`az vm create ...`). Sau khi tạo, lấy IP công khai để dùng cho GitHub Secrets.
-
+1. Tạo Security Group cho VM:
 ```bash
-gcloud compute instances create mlops-serve \
-  --zone=us-central1-a \
-  --machine-type=e2-small \
-  --image-family=ubuntu-2204-lts \
-  --image-project=ubuntu-os-cloud \
-  --tags=mlops-serve \
-  --project $PROJECT
+aws ec2 create-security-group \
+  --group-name mlops-sg \
+  --description "Security group for MLOps server"
+```
 
-# Mở cổng 8000 cho inference API
-gcloud compute firewall-rules create allow-mlops-serve \
-  --allow=tcp:8000 \
-  --target-tags=mlops-serve \
-  --project $PROJECT
+2. Mở cổng 22 (SSH) và cổng 8000 (API) cho Security Group:
+```bash
+aws ec2 authorize-security-group-ingress --group-name mlops-sg --protocol tcp --port 22 --cidr 0.0.0.0/0
+aws ec2 authorize-security-group-ingress --group-name mlops-sg --protocol tcp --port 8000 --cidr 0.0.0.0/0
+```
 
-# Lấy IP công khai của VM (lưu lại, cần dùng cho GitHub Secrets)
-gcloud compute instances describe mlops-serve \
-  --zone=us-central1-a \
-  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+3. Khởi chạy một instance EC2 Ubuntu 22.04 LTS (thay đổi `--key-name` bằng key pair của bạn):
+```bash
+aws ec2 run-instances \
+  --image-id ami-053b0d53c279acc90 \
+  --count 1 \
+  --instance-type t2.micro \
+  --key-name <YOUR_KEY_PAIR_NAME> \
+  --security-groups mlops-sg
+```
+
+4. Lấy IP công khai (Public IP) của VM:
+```bash
+aws ec2 describe-instances \
+  --filters "Name=instance-state-name,Values=running" "Name=group-name,Values=mlops-sg" \
+  --query "Reservations[*].Instances[*].PublicIpAddress" \
+  --output text
 ```
 
 ---
 
 ## 2.5 Cấu Hình VM (Thực Hiện Một Lần, Thủ Công)
 
-SSH vào VM:
+SSH vào VM bằng private key của key pair:
 
 ```bash
-gcloud compute ssh mlops-serve --zone=us-central1-a
+ssh -i <YOUR_KEY>.pem ubuntu@<VM_IP>
 ```
 
 Bên trong VM, cài đặt các thư viện cần thiết:
 
 ```bash
 sudo apt update && sudo apt install -y python3-pip
-pip3 install fastapi uvicorn scikit-learn joblib google-cloud-storage
+pip3 install fastapi uvicorn scikit-learn joblib boto3
 
-mkdir -p ~/models ~/src
+mkdir -p ~/models ~/src ~/.aws
 ```
 
-Thoát khỏi VM, sau đó copy file key lên VM:
+Tạo file `~/.aws/credentials` trên VM chứa AWS credentials vừa tạo của `mlops-lab-user` để Python SDK (`boto3`) có thể đọc được:
 
 ```bash
-gcloud compute scp sa-key.json mlops-serve:~/sa-key.json \
-  --zone=us-central1-a
+cat <<EOF > ~/.aws/credentials
+[default]
+aws_access_key_id = <AccessKeyId>
+aws_secret_access_key = <SecretAccessKey>
+EOF
 ```
+
+Thoát khỏi VM.
 
 ---
 
@@ -166,33 +205,30 @@ gcloud compute scp sa-key.json mlops-serve:~/sa-key.json \
 Tạo file `src/serve.py` theo khung dưới đây. File này chạy trên VM và cung cấp REST API để nhận yêu cầu suy luận.
 
 Nhiệm vụ:
-1. Khi khởi động, tải file `model.pkl` từ GCS về máy.
+1. Khi khởi động, tải file `model.pkl` từ S3 về máy.
 2. Cung cấp endpoint `GET /health` trả về trạng thái server.
 3. Cung cấp endpoint `POST /predict` nhận 12 đặc trưng và trả về nhãn dự đoán.
 
 ```python
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-# Cloud SDK: google-cloud-storage (GCP) | boto3 (AWS) | azure-storage-blob (Azure)
-from google.cloud import storage   # thay bằng SDK của provider đã chọn
+import boto3
 import joblib
 import os
 
 app = FastAPI()
 
-# Đọc tên bucket từ biến môi trường (được đặt trong systemd service)
-GCS_BUCKET = os.environ["GCS_BUCKET"]
-GCS_MODEL_KEY = "models/latest/model.pkl"
+# Đọc cấu hình từ biến môi trường
+AWS_BUCKET = os.environ["AWS_BUCKET"]
+AWS_MODEL_KEY = "models/latest/model.pkl"
 MODEL_PATH = os.path.expanduser("~/models/model.pkl")
 
 
 def download_model():
-    """Tải file model.pkl từ GCS về máy khi server khởi động."""
-    # TODO 2.6.1: Tạo một storage.Client()
-    # TODO 2.6.2: Lấy bucket bằng client.bucket(GCS_BUCKET)
-    # TODO 2.6.3: Lấy blob bằng bucket.blob(GCS_MODEL_KEY)
-    # TODO 2.6.4: Tải file xuống bằng blob.download_to_filename(MODEL_PATH)
-    # TODO 2.6.5: In thông báo thành công
+    """Tải file model.pkl từ S3 về máy khi server khởi động."""
+    # TODO 2.6.1: Tạo boto3 s3 client
+    # TODO 2.6.2: Gọi s3.download_file(AWS_BUCKET, AWS_MODEL_KEY, MODEL_PATH)
+    # TODO 2.6.3: In thông báo thành công
     pass  # xóa dòng này khi đã viết xong
 
 
@@ -208,7 +244,7 @@ class PredictRequest(BaseModel):
 @app.get("/health")
 def health():
     """Endpoint kiểm tra sức khỏe server. GitHub Actions dùng endpoint này để xác nhận deploy thành công."""
-    # TODO 2.6.6: Trả về dict {"status": "ok"}
+    # TODO 2.6.4: Trả về dict {"status": "ok"}
     pass  # xóa dòng này khi đã viết xong
 
 
@@ -220,12 +256,12 @@ def predict(req: PredictRequest):
     Đầu vào: JSON {"features": [f1, f2, ..., f12]}
     Đầu ra:  JSON {"prediction": <0|1|2>, "label": <"thấp"|"trung_bình"|"cao">}
     """
-    # TODO 2.6.7: Kiểm tra len(req.features) == 12.
+    # TODO 2.6.5: Kiểm tra len(req.features) == 12.
     #   Nếu không, raise HTTPException(status_code=400, detail="Expected 12 features (wine quality)")
 
-    # TODO 2.6.8: Gọi model.predict([req.features]) để lấy kết quả dự đoán.
+    # TODO 2.6.6: Gọi model.predict([req.features]) để lấy kết quả dự đoán.
 
-    # TODO 2.6.9: Trả về dict chứa "prediction" (int) và "label" (string).
+    # TODO 2.6.7: Trả về dict chứa "prediction" (int) và "label" (string).
     #   Nhãn: 0 -> "thấp", 1 -> "trung_bình", 2 -> "cao"
     pass  # xóa dòng này khi đã viết xong
 
@@ -235,24 +271,23 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
 
-Upload file `serve.py` len VM:
+Upload file `serve.py` lên VM:
 
 ```bash
-gcloud compute scp src/serve.py mlops-serve:~/src/serve.py \
-  --zone=us-central1-a
+scp -i <YOUR_KEY>.pem src/serve.py ubuntu@<VM_IP>:~/src/serve.py
 ```
 
 ---
 
-## 2.7 Cau Hinh Systemd Service Tren VM
+## 2.7 Cấu Hình Systemd Service Trên VM
 
-SSH tro lai vao VM:
+SSH trở lại vào VM:
 
 ```bash
-gcloud compute ssh mlops-serve --zone=us-central1-a
+ssh -i <YOUR_KEY>.pem ubuntu@<VM_IP>
 ```
 
-Tao file service de server tu dong khoi dong lai khi VM reboot:
+Tạo file service để server tự động khởi động lại khi VM reboot:
 
 ```bash
 sudo tee /etc/systemd/system/mlops-serve.service > /dev/null <<EOF
@@ -261,11 +296,11 @@ Description=MLOps Model Inference Server
 After=network.target
 
 [Service]
-User=$USER
-WorkingDirectory=/home/$USER
-Environment="GCS_BUCKET=<YOUR_BUCKET_NAME>"
-Environment="GOOGLE_APPLICATION_CREDENTIALS=/home/$USER/sa-key.json"
-ExecStart=/usr/bin/python3 /home/$USER/src/serve.py
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+Environment="AWS_BUCKET=<YOUR_BUCKET_NAME>"
+Environment="AWS_DEFAULT_REGION=<AWS_REGION>"
+ExecStart=/usr/bin/python3 /home/ubuntu/src/serve.py
 Restart=always
 RestartSec=5
 
@@ -277,132 +312,55 @@ sudo systemctl daemon-reload
 sudo systemctl enable mlops-serve
 ```
 
-Thay `<YOUR_BUCKET_NAME>` bang ten bucket thuc su cua ban truoc khi chay.
+Thay `<YOUR_BUCKET_NAME>` và `<AWS_REGION>` bằng tên thực tế của bạn trước khi chạy.
 
-Chua can khoi dong service luc nay. Model chua co tren GCS cho den khi pipeline CI/CD chay lan dau tien.
+Chưa cần khởi động service lúc này. Model chưa có trên S3 cho đến khi pipeline CI/CD chạy lần đầu tiên.
 
 ---
 
-## 2.8 Tao SSH Key De GitHub Actions Deploy
+## 2.8 Tạo SSH Key Để GitHub Actions Deploy
 
-Chay tren may tinh ca nhan (khong phai VM):
+Chạy trên máy tính cá nhân (không phải VM):
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/mlops_deploy -N "" -C "github-actions-deploy"
 ```
 
-Them public key vao VM:
+Thêm public key vào VM:
 
 ```bash
-gcloud compute ssh mlops-serve --zone=us-central1-a \
-  --command "echo '$(cat ~/.ssh/mlops_deploy.pub)' >> ~/.ssh/authorized_keys"
+ssh -i <YOUR_KEY>.pem ubuntu@<VM_IP> "echo '$(cat ~/.ssh/mlops_deploy.pub)' >> ~/.ssh/authorized_keys"
 ```
 
 ---
 
-## 2.9 Them GitHub Secrets
+## 2.9 Thêm GitHub Secrets
 
-Vao repo GitHub: Settings > Secrets and variables > Actions > New repository secret.
+Vào repo GitHub: Settings > Secrets and variables > Actions > New repository secret.
 
-Them chinh xac 5 secrets sau:
+Thêm chính xác các secrets sau:
 
-| Ten secret | Cach lay gia tri |
+| Tên secret | Cách lấy giá trị |
 |---|---|
-| CLOUD_CREDENTIALS | GCP: toàn bộ nội dung `sa-key.json` (JSON). AWS: `{"aws_access_key_id":"...","aws_secret_access_key":"..."}`. Azure: Connection String. |
-| CLOUD_BUCKET | Tên bucket / container (ví dụ: `my-mlops-bucket`) |
-| VM_HOST | IP cong khai cua VM (tu buoc 2.4) |
-| VM_USER | Ten user tren VM (chay `echo $USER` trong session SSH tren VM) |
-| VM_SSH_KEY | Dan toan bo noi dung `~/.ssh/mlops_deploy` (private key, bat dau bang `-----BEGIN OPENSSH PRIVATE KEY-----`) |
-
-Kiem tra: Moi secret khi dan vao phai khong co khoang trang o dau hoac cuoi.
-
----
-
-## 2.10 Viet `tests/test_train.py`
-
-Cac test nay chay tren du lieu nho tao trong bo nho (khong can pull DVC), dam bao chay duoc trong GitHub Actions ma khong can xac thuc GCS.
-
-Tao file `tests/test_train.py` theo khung duoi day:
-
-```python
-import os
-import json
-import numpy as np
-import pandas as pd
-from src.train import train
-
-
-FEATURE_NAMES = [
-    "fixed_acidity", "volatile_acidity", "citric_acid", "residual_sugar",
-    "chlorides", "free_sulfur_dioxide", "total_sulfur_dioxide", "density",
-    "pH", "sulphates", "alcohol", "wine_type",
-]
-
-
-def _make_temp_data(tmp_path):
-    """
-    Tao dataset nho voi cung schema Wine Quality de su dung trong test.
-
-    pytest cung cap `tmp_path` la mot thu muc tam thoi, tu dong duoc xoa sau khi test ket thuc.
-    """
-    rng = np.random.default_rng(0)
-    n = 200
-    # TODO 2.10.1: Tao mang X co kich thuoc (n, len(FEATURE_NAMES)) voi gia tri ngau nhien [0, 1)
-    # TODO 2.10.2: Tao mang y co n phan tu, moi phan tu la so nguyen ngau nhien trong [0, 3)
-    # TODO 2.10.3: Tao DataFrame tu X voi cac cot la FEATURE_NAMES, them cot "target" = y
-    # TODO 2.10.4: Luu 160 dong dau vao file train.csv va 40 dong cuoi vao file eval.csv tai tmp_path
-    # TODO 2.10.5: Tra ve (train_path, eval_path)
-    pass  # xoa dong nay khi da viet xong
-
-
-def test_train_returns_float(tmp_path):
-    """Kiem tra ham train() tra ve mot so thuc trong khoang [0, 1]."""
-    train_path, eval_path = _make_temp_data(tmp_path)
-    # TODO 2.10.6: Goi ham train() voi sieu tham so nho (n_estimators=10, max_depth=3)
-    # TODO 2.10.7: assert ket qua tra ve la float va nam trong [0.0, 1.0]
-    pass  # xoa dong nay khi da viet xong
-
-
-def test_metrics_file_created(tmp_path):
-    """Kiem tra file outputs/metrics.json duoc tao sau khi huan luyen."""
-    train_path, eval_path = _make_temp_data(tmp_path)
-    train(
-        {"n_estimators": 10, "max_depth": 3},
-        data_path=train_path,
-        eval_path=eval_path,
-    )
-    # TODO 2.10.8: assert file "outputs/metrics.json" ton tai
-    # TODO 2.10.9: Doc file metrics.json va assert no chua ca "accuracy" va "f1_score"
-    pass  # xoa dong nay khi da viet xong
-
-
-def test_model_file_created(tmp_path):
-    """Kiem tra file models/model.pkl duoc tao sau khi huan luyen."""
-    train_path, eval_path = _make_temp_data(tmp_path)
-    train(
-        {"n_estimators": 10, "max_depth": 3},
-        data_path=train_path,
-        eval_path=eval_path,
-    )
-    # TODO 2.10.10: assert file "models/model.pkl" ton tai
-    pass  # xoa dong nay khi da viet xong
-```
-
-Chay thu test cuc bo truoc khi commit:
-
-```bash
-pytest tests/ -v
-```
-
-Ba test deu phai qua truoc khi tiep tuc.
+| AWS_ACCESS_KEY_ID | Access Key ID của IAM User `mlops-lab-user` |
+| AWS_SECRET_ACCESS_KEY | Secret Access Key của IAM User `mlops-lab-user` |
+| AWS_DEFAULT_REGION | Region ví dụ `us-east-1` |
+| CLOUD_BUCKET | Tên S3 bucket (ví dụ: `my-mlops-bucket`) |
+| VM_HOST | IP công khai của EC2 VM (từ bước 2.4) |
+| VM_USER | `ubuntu` |
+| VM_SSH_KEY | Dán toàn bộ nội dung file `~/.ssh/mlops_deploy` (private key) |
 
 ---
 
-## 2.11 Viet `.github/workflows/mlops.yml`
+## 2.10 Viết `tests/test_train.py`
 
-Pipeline gồm bốn jobs chạy theo thứ tự: Unit Test -> Train -> Eval -> Deploy.
+*(Nội dung này giữ nguyên, do unit test sử dụng dữ liệu giả lập trong bộ nhớ và chạy cục bộ không cần kết nối cloud)*
 
-Tao file `.github/workflows/mlops.yml` theo khung duoi day:
+---
+
+## 2.11 Viết `.github/workflows/mlops.yml`
+
+Tạo file `.github/workflows/mlops.yml` theo cấu trúc dưới đây, đã chuyển sang dùng AWS S3:
 
 ```yaml
 name: MLOps Pipeline
@@ -418,7 +376,7 @@ on:
 
 jobs:
 
-  # JOB 1: Chay unit tests tren du lieu ao (khong can GCS)
+  # JOB 1: Chạy unit tests trên dữ liệu giả (không cần S3)
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -433,13 +391,12 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run tests
-        # TODO 2.11.1: Chay pytest tren thu muc tests/ voi co -v
-        run: # <dien lenh o day>
+        run: pytest tests/ -v
 
-  # JOB 2: Huan luyen mo hinh tren du lieu thuc, upload artifact len cloud storage
+  # JOB 2: Huấn luyện mô hình, upload model lên S3
   train:
     name: Train
-    needs: test              # Chi chay khi job test qua
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       accuracy: ${{ steps.read_metrics.outputs.accuracy }}
@@ -454,37 +411,36 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Authenticate to Cloud Storage
-        # TODO 2.11.2: Ghi noi dung secret CLOUD_CREDENTIALS ra file tam
-        #   va set bien moi truong xac thuc tuong ung:
-        #   GCP: GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json
-        #   AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-        #   Azure: AZURE_STORAGE_CONNECTION_STRING
-        run: |
-          # <dien code o day>
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
       - name: Pull data with DVC
-        # TODO 2.11.3: Dung lenh dvc pull de tai train_phase1.csv va eval.csv tu cloud storage
-        run: # <dien lenh o day>
+        run: dvc pull
 
       - name: Train model
         run: python src/train.py
 
       - name: Read metrics
         id: read_metrics
-        # TODO 2.11.4: Doc gia tri "accuracy" tu file outputs/metrics.json
-        #   va set no thanh output "accuracy" de job deploy co the doc duoc.
-        #   Goi y: su dung python -c "..." va echo "accuracy=..." >> $GITHUB_OUTPUT
         run: |
-          # <dien code o day>
+          python -c "
+          import json
+          with open('outputs/metrics.json') as f:
+              m = json.load(f)
+              print(f'accuracy={m[\"accuracy\"]}')
+          " >> $GITHUB_OUTPUT
 
-      - name: Upload model to Cloud Storage
-        # TODO 2.11.5: Su dung google-cloud-storage SDK de upload
-        #   file models/model.pkl len gs://<bucket>/models/latest/model.pkl
+      - name: Upload model to S3
         run: |
-          python - <<'EOF'
-          # <dien code Python o day>
-          EOF
+          python -c "
+          import boto3, os
+          s3 = boto3.client('s3')
+          s3.upload_file('models/model.pkl', '${{ secrets.CLOUD_BUCKET }}', 'models/latest/model.pkl')
+          "
 
       - name: Save metrics as artifact
         uses: actions/upload-artifact@v4
@@ -492,110 +448,94 @@ jobs:
           name: metrics
           path: outputs/metrics.json
 
-  # JOB 3: Kiem tra chat luong - chi cho phep deploy khi accuracy >= 0.70
+  # JOB 3: Kiểm tra chất lượng - chỉ cho phép deploy khi accuracy >= 0.70
   eval:
     name: Eval
-    needs: train             # Chi chay khi job train qua
+    needs: train
     runs-on: ubuntu-latest
     steps:
-
       - name: Check eval gate
-        # TODO 2.11.6: Doc gia tri accuracy tu output cua job train.
-        #   Neu accuracy < 0.70, ket thuc voi loi (SystemExit hoac exit 1).
-        #   Neu dat, in thong bao va tiep tuc.
         run: |
-          python - <<'EOF'
-          # <dien code Python o day>
-          EOF
+          python -c "
+          acc = float('${{ needs.train.outputs.accuracy }}')
+          if acc < 0.70:
+              print(f'Accuracy {acc:.4f} < 0.70. Deployment rejected.')
+              import sys; sys.exit(1)
+          else:
+              print(f'Accuracy {acc:.4f} >= 0.70. Deployment approved.')
+          "
 
-  # JOB 4: Trien khai sau khi eval gate qua
+  # JOB 4: Triển khai sau khi eval gate qua
   deploy:
     name: Deploy
-    needs: eval              # Chi chay khi job eval qua
+    needs: eval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
-            # TODO 2.11.7: Restart service mlops-serve tren VM.
-            # TODO 2.11.8: Cho server san sang (sleep 5 giay) roi goi curl /health de xac nhan.
-            #   Neu health check that bai, thoat voi exit 1.
-            # <dien lenh bash o day>
+            sudo systemctl restart mlops-serve
+            sleep 5
+            curl -f http://localhost:8000/health || exit 1
 ```
 
 ---
 
-## 2.12 Lan Chay Pipeline Dau Tien
+## 2.12 Lần Chạy Pipeline Đầu Tiên
 
-Tao hai file con trong `src/` va `tests/` de Python co the import module:
+Tạo hai file con trong `src/` và `tests/` để Python có thể import module:
 
 ```bash
 touch src/__init__.py tests/__init__.py
 ```
 
-Push tat ca len GitHub:
+Push tất cả lên GitHub:
 
 ```bash
 git add .
-git commit -m "feat: add CI/CD pipeline, tests, and serving API"
+git commit -m "feat: add AWS CI/CD pipeline, tests, and serving API"
 git push origin main
 ```
 
-Theo doi pipeline trong tab **Actions** tren repo GitHub.
+Theo dõi pipeline trong tab **Actions** trên repo GitHub.
 
-Sau khi pipeline chay thanh cong va model da duoc upload len cloud storage, khoi dong service tren VM:
+Sau khi pipeline chạy thành công và model đã được upload lên S3, khởi động service trên VM:
 
 ```bash
-gcloud compute ssh mlops-serve --zone=us-central1-a \
-  --command "sudo systemctl start mlops-serve"
+ssh -i <YOUR_KEY>.pem ubuntu@<VM_IP> "sudo systemctl start mlops-serve"
 ```
 
-Thu nghiem endpoint:
+Thử nghiệm endpoint:
 
 ```bash
 VM_IP=<YOUR_VM_IP>
 
-# Kiem tra suc khoe
+# Kiểm tra sức khỏe
 curl http://$VM_IP:8000/health
 
-# Du doan (12 dac trung theo thu tu trong FEATURE_NAMES)
+# Dự đoán (12 đặc trưng theo thứ tự trong FEATURE_NAMES)
 curl -X POST http://$VM_IP:8000/predict \
   -H "Content-Type: application/json" \
   -d '{"features": [7.4, 0.70, 0.00, 1.9, 0.076, 11.0, 34.0, 0.9978, 3.51, 0.56, 9.4, 0]}'
 ```
 
-Ket qua mong doi:
+Kết quả mong đợi:
 
 ```json
-{"prediction": 0, "label": "thap"}
+{"prediction": 0, "label": "thấp"}
 ```
 
 ---
 
-## Xu Ly Su Co
+## Xử Lý Sự Cố
 
-**`dvc push` that bai voi loi xac thuc**
+**`dvc push` thất bại với lỗi xác thực**
 
-Xac nhan `sa-key.json` ton tai va `credentialpath` da duoc dat dung. Kiem tra bang:
-
-```bash
-cat .dvc/config
-```
-
-Neu chua co muc `credentialpath`, chay lai:
-
-```bash
-dvc remote modify myremote credentialpath sa-key.json
-```
-
-**GitHub Actions `dvc pull` that bai**
-
-Secret `CLOUD_CREDENTIALS` phải là toàn bộ nội dung JSON (GCP) hoặc chuỗi tương đương của provider. Mở secret trong GitHub Settings và xác nhận nội dung hợp lệ.
-
-**Job Deploy thất bại dù accuracy có vẻ đủ cao**
-
-GitHub Actions outputs là kiểu chuỗi. Đảm bảo code Python trong eval gate thực hiện chuyển đổi `float()` trước khi so sánh. Kiểm tra giá trị accuracy được in trong log của job Train.
+Xác nhận biến môi trường `AWS_ACCESS_KEY_ID` và `AWS_SECRET_ACCESS_KEY` đã được thiết lập đúng trong phiên làm việc hiện tại của terminal.
 
 **Service trên VM không khởi động được**
 
@@ -606,9 +546,9 @@ sudo journalctl -u mlops-serve -n 50
 ```
 
 Nguyên nhân phổ biến:
-- Biến môi trường `CLOUD_BUCKET` sai trong file service.
-- `sa-key.json` chưa được copy lên VM.
-- File model chưa tồn tại trên GCS (service chỉ có thể khởi động sau khi pipeline lần đầu tiên chạy thành công).
+- Biến môi trường `AWS_BUCKET` sai trong file service.
+- AWS Credentials của VM chưa được cấu hình đúng trong `~/.aws/credentials`.
+- File model chưa tồn tại trên S3.
 
 ---
 
@@ -616,11 +556,4 @@ Nguyên nhân phổ biến:
 
 - Cả bốn GitHub Actions jobs (Unit Test, Train, Eval, Deploy) đều hoàn thành thành công (màu xanh).
 - `curl http://VM_IP:8000/health` trả về `{"status": "ok"}`.
-- `curl http://VM_IP:8000/predict` trả về kết quả dự đoán hợp lệ.
-- GCS Console hiển thị file dữ liệu dưới `dvc/` và file model dưới `models/latest/model.pkl`.
-
-Chụp màn hình tab Actions hiển thị cả bốn jobs màu xanh (cần nộp bài).
-
----
-
-Tiếp theo: [Bước 3 - Huấn luyện liên tục](buoc-3.md)
+- S3 Console hiển thị file dữ liệu dưới `dvc/` và file model dưới `models/latest/model.pkl`.
