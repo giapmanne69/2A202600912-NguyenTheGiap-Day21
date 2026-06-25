@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
+import mlflow
 from src.train import train
 
 
@@ -19,6 +20,9 @@ def _make_temp_data(tmp_path):
     pytest cung cap `tmp_path` la mot thu muc tam thoi, tu dong xoa sau khi test ket thuc.
     Ham nay dung du lieu ngau nhien nen khong can ket noi GCS hay tai file CSV thuc.
     """
+    # Cấu hình MLflow ghi nhận dữ liệu vào thư mục tạm của test để tránh lỗi thiếu file trên GitHub runner
+    mlflow.set_tracking_uri(f"file:///{tmp_path}/mlruns")
+
     rng = np.random.default_rng(0)
     n = 200
 
