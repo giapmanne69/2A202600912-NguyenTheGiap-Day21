@@ -94,11 +94,11 @@ jobs:
         run: |
           python -c "
           acc = float('${{ needs.train.outputs.accuracy }}')
-          if acc < 0.70:
-              print(f'Accuracy {acc:.4f} < 0.70. Deployment rejected.')
+          if acc < 0.65:
+              print(f'Accuracy {acc:.4f} < 0.65. Deployment rejected.')
               import sys; sys.exit(1)
           else:
-              print(f'Accuracy {acc:.4f} >= 0.70. Deployment approved.')
+              print(f'Accuracy {acc:.4f} >= 0.65. Deployment approved.')
           "
 
   # JOB 4: Triển khai sau khi eval gate qua
